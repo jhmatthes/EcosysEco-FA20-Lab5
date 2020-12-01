@@ -1,0 +1,413 @@
+---
+title: 'BISC 307, Lab 5: Time series remote sensing'
+author: "Prof. Jackie Hatala Matthes, FA 2020"
+date: 'Lab: 3-4 December 2020'
+output:
+  html_document: default
+---
+
+### Lab 4 Objectives
+1. Investigate spatiotemporal patterns of marine chlorophyll from satellite imagery.
+2. 
+3. 
+4. 
+
+### 1. Introduction
+In this lab, we'll work with spatial time series raster data representing marine chlorophyll content, which was derived from satellite imagery. We'll combine these raster data with vector shapefile data to assess chlorophyll concentrations in both space and time. These exercises were edited for our class based on the [NOAA CoastWatch Satellite Data course in R](https://coastwatch.pfeg.noaa.gov/projects/r/introduction.html).  
+
+The functions that we'll use in this lab come from the rerddapXtracto, a R package with functions that allow easy extraction of satellite data from [ERDDAP servers](https://coastwatch.pfeg.noaa.gov/erddap/index.html). ERDDAP is a large compilation of open datasets and model simulations that are related to marine ecosystems, which includes (for some examples) satellite imgaery, animal telemetry measurements, fisheries data, and climate model projections. 
+
+In this lab we'll
+
+
+### 2. Extracting satellite chlorophyll data in a reserve boundary
+
+In this section, we will download data from within the boundaries of the [Monterey Bay National Marine Sanctuary (MBNMS)](https://montereybay.noaa.gov/) and visualize the data in a map. First, we'll use rerddap to retrieve information about a dataset from the ERDDAP server. Then, we'll use the rxtractogon function to extract satellite data for chlorophyll within an polygon of the MBMNS boundary over time. And lastly, we'll map the data.
+
+Let's load the libraries that we need for this lab. 
+```{r, results = FALSE, warning=FALSE, message=FALSE}
+# Load libraries
+library(rerddap)
+library(rerddapXtracto)
+
+library(raster)
+library(rgdal)
+library(ggplot2)
+library(dplyr)
+library(usdm)
+#library(sf)
+#library(tidyverse)
+
+#install.packages("ncdf4")
+#library(ncdf4)
+```
+
+The rerddapXtracto package comes with the dataset mbnms which conatains the longitude and latitude values for the boundary of the Monterey Bay National Marine Sanctuary. These coordinates draw the the boundary of the sanctuary on a map, like tracing a dot-to-dot drawing. Let's take a quick look at the contents of this data variable:
+
+```{r}
+# Look at Monterey Bay Sanctuary boundary data frame
+mbnms
+```
+
+For this example we will use 750 m VIIRS monthly chlorophyll dataset (ID in rerddap: erdVHNchlamday). We'll use the `info()` function from rerddap to gather the metadata about this satellite imagery data product. 
+
+```{r}
+# Use rerddap to get dataset metadata 
+dataInfo <- rerddap::info('erdVHNchlamday')  # N. Pacific 750 m VIIRS chl
+dataInfo <- rerddap::info('nesdisVHNSQchlaMonthly')
+# Display the metadata 
+dataInfo
+```
+
+From the metadata we can see the temporal and spatial range of the data in addition to the variable name and the units. 
+
+Now that we've examined the metadata, we can develop the options for extracting satellite chlorophyll data within the MBMNS boundary. To use the ERDDAP functions, we need to set values for the parameter to extract, the time range, and the x, y, and altitude coordinates. 
+
+```{r}
+# Set the variable to extract
+parameter <- "chla"
+parameter <- "chlor_a"
+
+# Set the time range for the latest two image files
+tcoord <- c("last-1", "last")
+
+# Extract the latitude & longitude MBNMS boundaries to vectors
+xcoord <- mbnms$Longitude
+ycoord <- mbnms$Latitude
+
+# Set the altitude variable (z-direction) to zero
+zcoord <- 0. 
+
+# Request the data using the rxtractogen function
+sanctchl <- rxtractogon(dataInfo, parameter=parameter, xcoord=xcoord,
+                        ycoord=ycoord, tcoord=tcoord, zcoord=zcoord)
+
+# Look at the structure of the returned data
+str(sanctchl)
+```
+
+Next, let's plot just the second time point, 2019-09-16, and plot it as a map. The first thing that we need to do is separate out the x and y dimensions of the chlorophyll data from the time dimension. If we look at the dimensions of the chlorophyll data, we see: 
+
+```{r}
+# Look at the size of the dimensons of the chlorophyll data
+dim(sanctchl$chla)
+```
+
+From this, we see that the chlorophyll data has 3-dimensions, with 272 rows, 311 columns, and 2 timepoints (this is the third dimension). This is like two maps that are stacked on top of each other. To make a 2-D map, we need to separate out just the x and y dimesions at one timepoint. And once we extract the map for one of the timepoints, we'll map it using the `plotBBox()` function, which is included in the `errdapXtracto` package.
+
+```{r}
+# Select just the second time period (most recent data)
+sanctchl1 <- sanctchl
+sanctchl1$chlor_a <- sanctchl1$chlor_a[, , 2] # pick the second timepoint, include all x,y
+sanctchl1$time <- sanctchl1$time[2]
+
+# Plot MBNMS chlorophyll
+plotBBox(sanctchl1, plotColor = 'algae',
+         name = expression(Chlorophyll ~ a ~ (mg ~ m^{-3})))
+
+```
+
+The `plotBBox()` function will also let you apply a function to the data, for exmaple a log-transformation: 
+
+```{r}
+# Plot the chlorophyll data with a log transformation
+myFunc <- function(x) log(x) 
+plotBBox(sanctchl1, plotColor = 'algae', 
+         name = expression(log ~ Chlorophyll ~ a ~ (mg ~ m^{-3})),
+         maxpixels=100000, myFunc=myFunc)
+```
+
+### 2. Time series satellite data
+
+In this section, we will extract and analyze a time-series of monthly satellite chlorophyll data for the period of 2012-present from the VIIRS satellite for the MBNMS. We'll use the same x and y coordinates for the santuary boundary from the first section to make a boundary box for the satellite time series, and we'll need to search the metadata in dataInfo to find the start date.
+
+```{r}
+# Display the dataset metadata
+dataInfo
+
+# # Set x,y coordinates to be min/max from MBNMS for bounding box
+# xcoord <- c(min(mbnms$Longitude), max(mbnms$Longitude))
+# ycoord <- c(min(mbnms$Latitude), max(mbnms$Latitude))
+
+# Extract the parameter name from the metadata in dataInfo
+parameter <- "chlor_a"
+
+# Set the altitude coordinate to zero
+zcoord <- 0.
+
+# Extract the beginning and ending dates of the dataset from the metadata in dataInfo
+global <- dataInfo$alldata$NC_GLOBAL
+tt <- global[ global$attribute_name %in% c('time_coverage_end','time_coverage_start'), "value", ]
+
+# Use the time_coverage_start from dataInfo for the time vector 
+# Use the "last" option for the ending date
+tcoord <- c(tt[2],"last")
+
+# Extract the timeseries data using rxtractogon
+chlVIIRS <- rxtractogon(dataInfo,parameter=parameter,
+                        tcoord=tcoord,
+                        xcoord=xcoord, ycoord=ycoord, zcoord=zcoord)
+
+# Drop the z-coordinate from the data (it's just 0) to make plotting easier
+chlVIIRS$chlor_a <- drop(chlVIIRS$chlor_a)
+```
+
+Now that we downloaded the time series of VIIRS data for the Monterey Bay Sanctuary, let's look at the dimensions of the data: 
+
+```{r}
+# Look at chlVIIRS time series dimensions
+dim(chlVIIRS$chlor_a)
+```
+
+Now we can see that there are 49 different maps with the same x,y coordinates that represent the time series of satellite data. Two common ways of using these types of data are: 
+
+1. average over the spatial domain to represent a time series 
+2. average over the temporal domain to represent a 2-D spatial average
+
+First, we'll look at the time series of chlorophyll data averaged over the MBNMS area: 
+
+```{r}
+# Spatially average all the data within the box for each dataset.
+# The c(3) indicates the dimension to keep - in this case time 
+chlVIIRS$avg <- apply(chlVIIRS$chlor_a, c(3),function(x) mean(x,na.rm=TRUE))
+
+# Make into a data frame
+chlVIIRS_ts <- data.frame(date = as.Date(chlVIIRS$time),
+                          chlor_a = chlVIIRS$avg)
+
+# Plot the time series
+ggplot(chlVIIRS_ts, aes(x = date, y = chlor_a)) +
+  geom_point() + 
+  geom_line() +
+  labs(y = expression(Chlorophyll ~ a ~ (mg ~ m^{-3}))) +
+  theme_bw()
+```
+
+We can also average over the temporal domain to look at a spatial average for chlorophyll values in the Monterey Bay Sanctuary during this time period. Let's convert the spatial satellite data that we downloaded into a raster object and data frame that we can plot with ggplot using similar tools to the canopy height model from last lab:
+
+```{r}
+## Temporally average all of the data into one map 
+## The c(1,2) indicates the dimensions to keep - in this case latitude and longitude  
+chlVIIRS$avgmap <- apply(chlVIIRS$chlor_a,c(1,2),function(x) mean(x,na.rm=TRUE))
+
+# Get coastline base layer map
+coast <- map_data("worldHires", ylim = c(min(ycoord),max(ycoord)), 
+                  xlim = c(min(xcoord),max(xcoord)))
+
+# Make average chlorophyll map a raster
+chl_raster <- raster(apply(t(chlVIIRS$avgmap),2,rev), # need to rotate counterclockwise
+                    xmn=range(chlVIIRS$longitude)[1], xmx=range(chlVIIRS$longitude)[2],
+                    ymn=range(chlVIIRS$latitude)[1], ymx=range(chlVIIRS$latitude)[2], 
+                    crs=CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"))
+
+# Convert raster to data frame
+chl_df <- as.data.frame(r, xy=TRUE)
+
+# Plot average chlorophyll map
+ggplot(data = chl_df) +
+  geom_raster(aes(x = x, y = y, fill = log(layer)), na.rm = T) +
+  geom_polygon(data = coast, aes(x=long, y = lat, group = group), fill = "grey80") +
+  theme_bw(base_size = 12) + ylab("Latitude") + xlab("Longitude") +
+  coord_fixed(1.3, xlim = c(-123.5, -121), ylim = c(35.5,38)) +
+  scale_fill_gradientn(colours = topo.colors(12), na.value = NA, limits=c(-2,3),
+                       name = expression(Avg ~ Chlorophyll ~ a ~ (mg ~ m^{-3})))
+
+```
+
+
+***
+**Discussion 1:**
+Within your group, discuss the analysis steps that the produced map above. Where are chlorophyll values higher/lower? Is this what you would expect? How does this tie to marine ecosystem processes? 
+
+***
+
+### 3. Assessing cross-correlation between two time series 
+
+With time series data, we are often interested in looking at the relationships among variables, for example whether chlorophyll content can be explained by sea surface temperature (SST). However, we can't immediately apply correlation or linear regression to time series data, since they can be autocorrelated, violating the assumptions of these tests. 
+
+Temporal autocorrelation describes when two datapoints that are measured through time or space are correlated with data at other points in time or space. For example, if we measure hourly air temperature, the temperature at 11am on one day is most likely highly correlated with the temperature measurement at 10am. Likewise in space, if we are measuring air temperature every 500 meters on a transect, the measurements that are more nearby each other are likely more correlated than measurements further away. 
+
+We need to describe and account for this autocorrelation when we assess statistical relationships, because this violates assumptions about the independence of data - two air temperature measurements collected at 10am and 11am are not independent, since the tempearature at 11am depends on the temperature at 10am. 
+
+In this next analysis, we're going to compare the amount of autocorrelation in the time series of chlorophyll and sea surface temperature. Then, we'll account for any autocorrelation when we create a regression model to test the hypothesis that sea surface temperature is positively related to chlorophyll content. 
+
+First, we need to download the SST data for the MBNMS: 
+
+```{r}
+# Get monthly SST data
+dataInfo_SST <- rerddap::info('erdHadISST')
+
+# Look at SST metadata to find variable names 
+dataInfo_SST
+
+parameter <- 'sst'
+
+# Set time coordinates to chlorophyll data limits
+# Use same xcoord and ycoord for the MBNMS data
+tcoord <- c(as.character(min(chlVIIRS_ts$date)), "last")
+sstHAD <- rxtractogon(dataInfo_SST, 
+                       parameter, xcoord = xcoord, ycoord = ycoord,
+                       tcoord = tcoord)
+
+# Drop the z-coordinate from the data (it's just 0) to make analysis easier
+sstHAD$sst <- drop(sstHAD$sst)
+
+# Spatially average all the data within the box for each dataset.
+# The c(3) indicates the dimension to keep - in this case time 
+sstHAD$avg <- apply(sstHAD$sst, c(3),function(x) mean(x,na.rm=TRUE))
+
+# Make into a data frame
+# Round date to start of month to match chlorophyll data
+sstHAD_ts <- data.frame(date = as.Date(sstHAD$time),
+                          sst = sstHAD$avg) %>%
+  mutate(date = lubridate::round_date(date, "month")) 
+
+# Plot time series of SST
+ggplot(sstHAD_ts, aes(x = date, y = sst)) +
+  geom_point() +
+  geom_line() +
+  labs(y = "Sea surface temperature (C)") +
+  theme_bw()
+```
+
+Now we'll combine the monthly chlorophyll and sea surface temperatures into one dataframe, and assess the autocorrelation within each of these variables: 
+
+```{r}
+# Combine the chlorophyll and sst data into 1 data frame
+chl_sst <- full_join(sstHAD_ts, chlVIIRS_ts) %>%
+  drop_na # drop any missing values
+
+# Plot the temporal autocorrelation for chla
+acf(chl_sst$chlor_a)
+
+```
+
+The `acf()` function in R plots the correlation coefficient with the dataset lagged to itself at different timesteps. The correlation at a time lag of 0 is 1.0, since the data match perfectly. For the x-axis value at lag 1, this is the correlation between the original data and the dataset shifted one month ahead (so for each data point: Jan-Feb comparison, Feb-March comparison, etc ...). The blue dashed lines are the confidence intervals for a signficiant correlation, where the data are significantly autocorrelated at lags that exceed these bounds.
+
+Now, let's look at the autocorrelation plot for sea surface temperature:  
+```{r}
+# Look at temporal autocorrelation for sst
+acf(chl_sst$sst)
+
+# List acf values at different time lags: 
+sst_acf_values <- acf(chl_sst$sst)
+sst_acf_values
+```
+
+***
+**Discussion 2:**
+Are the sea surface temperature data significantly autocorrelated, and if so, at what time lags? Why might the sst data be more strongly autocorrelated than the chlorophyll data?
+
+***
+
+Next, let's look at the cross-correlation between sea surface temperature and chlorophyll content. The cross-correlation function is similar to the autocorrelation function, where the cross-correlation fucntion calculates the correlation coefficient of one dataset to another dataset at different time lags. 
+
+```{r}
+# Cross-correlation for sst & chla
+ccf(chl_sst$sst, chl_sst$chlor_a)
+
+# Print cross-correlation values for sst & chla
+ccfvalues <- ccf(chl_sst$sst, chl_sst$chlor_a)
+ccfvalues
+```
+
+Now that we know the chlorophyll data are most strongly correlated with the sea surface temperature 3 months earlier, we can create a new column with that lagged variable and use linear regression to assess the strength of the relationship: 
+
+```{r}
+## Make 3-month lagged SST column for data frame
+# 1. repeat NA for 3 months (no lag data available early in time series)
+SST_lag3 <- rep(NA,3) 
+
+# 2. put lagged SST data into 12th month onward
+SST_lag3[4:(3+nrow(chl_sst))] <- chl_sst$sst 
+
+# 3. clip out last 3 months of lagged sst data (no chl data here)
+SST_lag3 <- SST_lag3[1:nrow(chl_sst)] 
+
+# 4. add column to data frame
+chl_sst <- mutate(chl_sst, sst_lag3 = SST_lag3)
+
+## Linear regression model for chlorophyll ~ sst lagged 3 months
+lm_chlsst3 <- lm(chlor_a ~ sst_lag3, data = chl_sst)
+summary(lm_chlsst3) # look at linear regression output
+
+## ggplot: chlorophyll ~ sst lagged 3 months
+ggplot(chl_sst, aes(x = sst_lag3, y = chlor_a)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "Sea surface temperautre lagged 3 months (C)",
+       y = expression(Chlorophyll ~ a ~ (mg ~ m^{-3}))) +
+  theme_bw()
+```
+
+***
+**Discussion 3:**
+How well does this linear regression model fit the data? Are there sst values/chlorophyll values where it works better or worse? 
+
+***
+
+### 4. Extending analysis to other marine ecosystems
+
+In the last part of this lab, we'll work through the code to download a shapefile for the Hawaiian Islands Humpback Whale Sanctuary. I've downloaded the shapefile and saved it in the `data/` folder in this repository from this list of boundaries for all of the [NOAA sanctuaries](https://sanctuaries.noaa.gov/library/imast_gis.html).
+
+We'll use the `sf` package in R to read in the shapefile for the HI whale sanctuary with the `st_read()` function:
+
+```{r}
+# Read HI whale sanctuary shapefile (.shp file)
+hiWhale_shp <- st_read("data/hihwnms_py2/hihwnms_py.shp")
+
+# Set the variable to extract
+parameter <- "chlor_a"
+
+# Set the time range to match the MBNMS data
+tcoord <- c("2012-01-02 12:00:00", "last")
+
+# Extract the latitude & longitude FL Keys boundary box
+hiWhale_bbox <- as.numeric(st_bbox(hiWhale_shp))
+xcoord <- c(hiWhale_bbox[1], hiWhale_bbox[3])
+ycoord <- c(hiWhale_bbox[2], hiWhale_bbox[4])
+
+# Set the altitude variable (z-direction) to zero
+zcoord <- 0. 
+
+# Request the data using the rxtracto_3D function
+hiWhale_chl <- rxtracto_3D(dataInfo, parameter=parameter, 
+                           xcoord=xcoord, ycoord=ycoord, 
+                           tcoord=tcoord, zcoord=zcoord)
+
+# Drop the z-coordinate from the data (it's just 0) to make plotting easier
+hiWhale_chl$chlor_a <- drop(hiWhale_chl$chlor_a)
+
+# Check dimensions of data
+dim(hiWhale_chl$chlor_a)
+
+```
+
+As a check on the data, let's plot the spatial data that represent the average across the time series: 
+```{r}
+# Select just the second time period (most recent data)
+sanctchl1 <- hiWhale_chl
+sanctchl1$chlor_a <- sanctchl1$chlor_a[, , 2] # pick the second timepoint, include all x,y
+sanctchl1$time <- sanctchl1$time[2]
+
+# Plot MBNMS chlorophyl
+myFunc <- function(x) log(x)
+plotBBox(sanctchl1, plotColor = 'algae',
+         name = expression(Chlorophyll ~ a ~ (mg ~ m^{-3})), 
+         maxpixels=100000, myFunc=myFunc)
+
+```
+
+***
+**LAB REPORT INSTRUCTIONS:**
+
+* For your Lab 5 Report, you should assess the relationship between chlorophyll content and sea surface temperature for one or more of the [NOAA sanctuaries](https://sanctuaries.noaa.gov/library/imast_gis.html). You can download the shapefiles for other sanctuaries and structure the satellite data query as in section 4 of this lab. 
+
+* As you structure your data analysis, produce an .Rmd file pretending that you are starting from scratch (i.e., don't assume that you have anything loaded from doing the lab exercise). The goal is to be able to hand someone your code and be able to have them re-run your analysis to see what you did and how - this is reproducible research! 
+
+* You should `Commit` and `Push` your Rmd file containing your R code and the integrated text for the Lab 5 Report following the Lab Report Guidelines. 
+
+* Your Lab 5 Report must include at least one analysis of time series data.
+
+***
+

@@ -7,18 +7,17 @@ output:
 ---
 
 ### Lab 4 Objectives
-1. Investigate spatiotemporal patterns of marine chlorophyll from satellite imagery.
-2. 
-3. 
-4. 
+1. Download and work with marine chlorophyll and sea surface temperature data from satellite imagery.
+2. Process multi-dimensional datasets. 
+3. Assess temporal autocorrelation within time series data.
+4. Use cross-correlation to identify relationships between different time series variables. 
 
 ### 1. Introduction
 In this lab, we'll work with spatial time series raster data representing marine chlorophyll content, which was derived from satellite imagery. We'll combine these raster data with vector shapefile data to assess chlorophyll concentrations in both space and time. These exercises were edited for our class based on the [NOAA CoastWatch Satellite Data course in R](https://coastwatch.pfeg.noaa.gov/projects/r/introduction.html).  
 
 The functions that we'll use in this lab come from the rerddapXtracto, a R package with functions that allow easy extraction of satellite data from [ERDDAP servers](https://coastwatch.pfeg.noaa.gov/erddap/index.html). ERDDAP is a large compilation of open datasets and model simulations that are related to marine ecosystems, which includes (for some examples) satellite imgaery, animal telemetry measurements, fisheries data, and climate model projections. 
 
-In this lab we'll
-
+In this lab we'll work with a spatial time series of chlorophyll data in a marine reserve in Monterey Bay, CA, and assess correpondence between chlorophyll concentrations and sea surface temperatures. We'll also learn how to consider autocorrelation and cross-correlation when analyzing time series data.
 
 ### 2. Extracting satellite chlorophyll data in a reserve boundary
 
@@ -29,32 +28,25 @@ Let's load the libraries that we need for this lab.
 # Load libraries
 library(rerddap)
 library(rerddapXtracto)
-
 library(raster)
 library(rgdal)
-library(ggplot2)
-library(dplyr)
-library(usdm)
-#library(sf)
-#library(tidyverse)
-
-#install.packages("ncdf4")
-#library(ncdf4)
+library(sf)
+library(tidyverse)
 ```
 
 The rerddapXtracto package comes with the dataset mbnms which conatains the longitude and latitude values for the boundary of the Monterey Bay National Marine Sanctuary. These coordinates draw the the boundary of the sanctuary on a map, like tracing a dot-to-dot drawing. Let's take a quick look at the contents of this data variable:
 
 ```{r}
 # Look at Monterey Bay Sanctuary boundary data frame
-mbnms
+head(mbnms)
 ```
 
-For this example we will use 750 m VIIRS monthly chlorophyll dataset (ID in rerddap: erdVHNchlamday). We'll use the `info()` function from rerddap to gather the metadata about this satellite imagery data product. 
+For this example we will use VIIRS monthly chlorophyll dataset (ID in rerddap: nesdisVHNSQchlaMonthly). We'll use the `info()` function from rerddap to gather the metadata about this satellite imagery data product. 
 
 ```{r}
 # Use rerddap to get dataset metadata 
-dataInfo <- rerddap::info('erdVHNchlamday')  # N. Pacific 750 m VIIRS chl
 dataInfo <- rerddap::info('nesdisVHNSQchlaMonthly')
+
 # Display the metadata 
 dataInfo
 ```
@@ -65,7 +57,6 @@ Now that we've examined the metadata, we can develop the options for extracting 
 
 ```{r}
 # Set the variable to extract
-parameter <- "chla"
 parameter <- "chlor_a"
 
 # Set the time range for the latest two image files
@@ -90,7 +81,7 @@ Next, let's plot just the second time point, 2019-09-16, and plot it as a map. T
 
 ```{r}
 # Look at the size of the dimensons of the chlorophyll data
-dim(sanctchl$chla)
+dim(sanctchl$chlor_a)
 ```
 
 From this, we see that the chlorophyll data has 3-dimensions, with 272 rows, 311 columns, and 2 timepoints (this is the third dimension). This is like two maps that are stacked on top of each other. To make a 2-D map, we need to separate out just the x and y dimesions at one timepoint. And once we extract the map for one of the timepoints, we'll map it using the `plotBBox()` function, which is included in the `errdapXtracto` package.
@@ -201,7 +192,7 @@ chl_raster <- raster(apply(t(chlVIIRS$avgmap),2,rev), # need to rotate countercl
                     crs=CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"))
 
 # Convert raster to data frame
-chl_df <- as.data.frame(r, xy=TRUE)
+chl_df <- as.data.frame(chl_raster, xy=TRUE)
 
 # Plot average chlorophyll map
 ggplot(data = chl_df) +
@@ -277,7 +268,7 @@ Now we'll combine the monthly chlorophyll and sea surface temperatures into one 
 chl_sst <- full_join(sstHAD_ts, chlVIIRS_ts) %>%
   drop_na # drop any missing values
 
-# Plot the temporal autocorrelation for chla
+# Plot the temporal autocorrelation for chlor_a
 acf(chl_sst$chlor_a)
 
 ```
@@ -303,10 +294,10 @@ Are the sea surface temperature data significantly autocorrelated, and if so, at
 Next, let's look at the cross-correlation between sea surface temperature and chlorophyll content. The cross-correlation function is similar to the autocorrelation function, where the cross-correlation fucntion calculates the correlation coefficient of one dataset to another dataset at different time lags. 
 
 ```{r}
-# Cross-correlation for sst & chla
+# Cross-correlation for sst & chlor_a
 ccf(chl_sst$sst, chl_sst$chlor_a)
 
-# Print cross-correlation values for sst & chla
+# Print cross-correlation values for sst & chlor_a
 ccfvalues <- ccf(chl_sst$sst, chl_sst$chlor_a)
 ccfvalues
 ```
